@@ -21,8 +21,20 @@ fn main() -> Result<()> {
 
             // The page size is stored at the 16th byte offset, using 2 bytes in big-endian order
             let page_size = u16::from_be_bytes([header[16], header[17]]);
+            // make it dynamic
+            let mut schema = [0; 4096 - 100];
+            file.read_exact(&mut schema)?;
 
             println!("database page size: {}", page_size);
+            // println!("header: {:X?}", header);
+            // println!("schema: {:X?}", schema);
+
+            let table_count = u16::from_be_bytes([schema[3], schema[4]]);
+            println!("number of tables: {}", table_count - 1);
+
+            // let offset = u16::from_be_bytes([schema[8], schema[9]]);
+
+            // println!("offset: {:X?}", &schema[(offset as usize) + 10..]);
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
