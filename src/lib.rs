@@ -20,7 +20,7 @@ pub fn tables(file: &mut File) -> Result<()> {
     let (table, _) = read_metadata(file)?;
 
     for row in table {
-        print!("{:?} ", row[2]);
+        print!("{} ", row[2]);
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 use crate::header;
-
 use anyhow::{bail, Result};
+use std::fmt;
 use std::str;
 
 pub fn read_page(page: &Vec<u8>, first: bool) -> Result<Table> {
@@ -83,6 +83,17 @@ impl PartialEq<&str> for CellType {
 
     fn ne(&self, other: &&str) -> bool {
         !&self.eq(other)
+    }
+}
+
+impl fmt::Display for CellType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self {
+            Self::INT(v) => write!(f, "{}", v),
+            Self::FLOAT(v) => write!(f, "{:.4}", v),
+            Self::BLOB(v) | Self::STRING(v) => write!(f, "{}", v),
+            _ => Ok(()),
+        }
     }
 }
 
