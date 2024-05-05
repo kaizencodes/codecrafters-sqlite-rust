@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use regex::Regex;
+use regex::RegexBuilder;
 use sqlite_starter_rust::{db_info, statement, tables};
 use std::fs::File;
 
@@ -12,7 +12,9 @@ fn main() -> Result<()> {
     }
     let mut file = File::open(&args[1])?;
     let command = &args[2];
-    let re = Regex::new(r"^SELECT")?;
+    let re = RegexBuilder::new(r"^SELECT")
+        .case_insensitive(true)
+        .build()?;
     match command.as_str() {
         ".dbinfo" => {
             db_info(&mut file)?;
