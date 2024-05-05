@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
-use sqlite_starter_rust::{db_info, tables};
+use regex::Regex;
+use sqlite_starter_rust::{db_info, statement, tables};
 use std::fs::File;
 
 fn main() -> Result<()> {
@@ -11,12 +12,16 @@ fn main() -> Result<()> {
     }
     let mut file = File::open(&args[1])?;
     let command = &args[2];
+    let re = Regex::new(r"^SELECT")?;
     match command.as_str() {
         ".dbinfo" => {
             db_info(&mut file)?;
         }
         ".tables" => {
             tables(&mut file)?;
+        }
+        _ if re.is_match(command) => {
+            statement(&mut file, command)?;
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
