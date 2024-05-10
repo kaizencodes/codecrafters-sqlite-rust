@@ -1,5 +1,6 @@
 use crate::header::DbHeader;
 use crate::reader::*;
+use crate::sql_parser::*;
 use anyhow::{bail, Result};
 use std::fs::File;
 use std::io::prelude::*;
@@ -7,6 +8,7 @@ use std::str;
 
 mod header;
 mod reader;
+mod sql_parser;
 
 pub fn db_info(file: &mut File) -> Result<()> {
     let (table, db_header) = read_metadata(file)?;
