@@ -1,43 +1,58 @@
 #[derive(Debug, PartialEq)]
-struct SelectStatement<'t> {
-    args: Vec<SelectArg<'t>>,
-    table: &'t str,
+pub struct SelectStatement<'t> {
+    pub args: Vec<SelectArg<'t>>,
+    pub table: &'t str,
 }
 
 #[derive(Debug, PartialEq)]
-enum SelectArg<'t> {
+pub enum SelectArg<'t> {
     LITERAL(&'t str),
     COUNT(&'t str),
 }
 
-#[derive(Debug, PartialEq)]
-struct CreateTableStatement<'t> {
-    args: Vec<CreateTableArg<'t>>,
-    table: &'t str,
+impl<'t> PartialEq<CreateTableArg<'t>> for SelectArg<'t> {
+    fn eq(&self, other: &CreateTableArg) -> bool {
+        match self {
+            SelectArg::LITERAL(v) => other.column == *v,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
-struct CreateTableArg<'t> {
-    column: &'t str,
+pub struct CreateTableStatement<'t> {
+    pub args: Vec<CreateTableArg<'t>>,
+    pub table: &'t str,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct CreateTableArg<'t> {
+    pub column: &'t str,
     //TODO: datatype: &'t str
 }
 
+impl<'t> PartialEq<SelectArg<'t>> for CreateTableArg<'t> {
+    fn eq(&self, other: &SelectArg) -> bool {
+        match other {
+            SelectArg::LITERAL(v) => self.column == *v,
+            _ => false,
+        }
+    }
+}
+
 peg::parser! {
-  grammar sql_parser() for str {
-    // General definitions
+  pub grammar parse() for str {
     rule literal() -> &'input str
         = val:$(['a'..='z' | 'A'..='Z']+) { val }
 
-    rule _ = [' ' | '\n' | '\t']+
-    rule __ = [' ' | '\n' | '\t']*
+    rule _ = [' ' | '\n' | '\t']
 
-    rule commasep<T>(x: rule<T>) -> Vec<T> = v:(x() ** (_? "," _)) ","? {v}
+    rule commasep<T>(x: rule<T>) -> Vec<T> = v:(x() ** (_* "," _*)) ","? {v}
     rule parenthesised<T>(x: rule<T>) -> T = "(" v:x() ")" {v}
     rule i(literal: &'static str) = input:$([_]*<{literal.len()}>) {? if input.eq_ignore_ascii_case(literal) { Ok(()) } else { Err(literal) } }
 
-    // SELECT
     pub rule select_statement() -> SelectStatement<'input>
-        = i("SELECT") _ args:commasep(<select_arg()>) _ i("FROM") _ table:literal() __ ";" {
+        = i("SELECT") _+ args:commasep(<select_arg()>) _+ i("FROM") _+ table:literal() _* ";" {
             SelectStatement{args, table }
         }
 
@@ -45,22 +60,20 @@ peg::parser! {
         = arg:(count() / select_literal()) { arg }
 
     rule count() -> SelectArg<'input>
-        = i("COUNT") __ arg:parenthesised(<(literal() / $("*"))>) {
+        = i("COUNT") _* arg:parenthesised(<(literal() / $("*"))>) {
             SelectArg::COUNT(arg)
         }
 
     rule select_literal() -> SelectArg<'input>
         = arg:(literal() / $("*")) { SelectArg::LITERAL(arg) }
 
-
-    // CREATE TABLE
     pub rule create_table_statement() -> CreateTableStatement<'input>
-        = i("CREATE") _ i("TABLE") _ table:literal() _ "(" _ args:commasep(<create_table_arg()>) _ ")" _? ";"? {
+        = i("CREATE") _+ i("TABLE") _+ table:literal() _+ "(" _* args:commasep(<create_table_arg()>) _* ")" _* ";"? {
             CreateTableStatement{args, table}
         }
 
     rule create_table_arg() -> CreateTableArg<'input>
-        = column:literal() _ (literal() ** _) { CreateTableArg{column} }
+        = column:literal() _+ (literal() ** (_+)) { CreateTableArg{column} }
   }
 }
 
@@ -76,7 +89,7 @@ mod tests {
             table: "table",
         };
 
-        let result = sql_parser::select_statement(input).unwrap();
+        let result = parse::select_statement(input).unwrap();
 
         assert_eq!(result, expected);
     }
@@ -89,7 +102,7 @@ mod tests {
             table: "table",
         };
 
-        let result = sql_parser::select_statement(input).unwrap();
+        let result = parse::select_statement(input).unwrap();
 
         assert_eq!(result, expected);
     }
@@ -104,7 +117,7 @@ mod tests {
             table: "table",
         };
 
-        let result = sql_parser::select_statement(input).unwrap();
+        let result = parse::select_statement(input).unwrap();
 
         assert_eq!(result, expected);
     }
@@ -117,7 +130,7 @@ mod tests {
             table: "table",
         };
 
-        let result = sql_parser::select_statement(input).unwrap();
+        let result = parse::select_statement(input).unwrap();
 
         assert_eq!(result, expected);
     }
@@ -130,7 +143,7 @@ mod tests {
             table: "table",
         };
 
-        let result = sql_parser::select_statement(input).unwrap();
+        let result = parse::select_statement(input).unwrap();
 
         assert_eq!(result, expected);
     }
@@ -152,7 +165,7 @@ mod tests {
             table: "apples",
         };
 
-        let result = sql_parser::create_table_statement(input);
+        let result = parse::create_table_statement(input);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), expected);
     }

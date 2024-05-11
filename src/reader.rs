@@ -71,6 +71,13 @@ impl CellType {
             _ => None,
         }
     }
+
+    pub fn to_str(&self) -> Option<&str> {
+        match &self {
+            CellType::STRING(val) | CellType::BLOB(val) => Some(&val[..]),
+            _ => None,
+        }
+    }
 }
 
 impl PartialEq<&str> for CellType {
@@ -118,7 +125,10 @@ fn read_cell(page: &Vec<u8>, mut pointer: usize) -> Result<Row> {
 
     for serial_type in serial_types {
         let record = read_elem(serial_type, page, &mut pointer)?;
-        row.push(record);
+        match record {
+            CellType::NULL => continue,
+            _ => row.push(record),
+        }
     }
     Ok(row)
 }
