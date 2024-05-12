@@ -70,7 +70,11 @@ pub fn statement(file: &mut File, query: &str) -> Result<()> {
         })
         .collect();
 
-    let table2 = read_page(&page_buffer, false)?;
+    let mut page = Page {
+        buffer: &page_buffer,
+        cursor: 0,
+    };
+    let table2 = read_page(&mut page, false)?;
     let mapping = table2
         .iter()
         .map(|row| {
@@ -96,7 +100,10 @@ fn read_metadata(file: &mut File) -> Result<(Table, DbHeader)> {
     let mut page_buffer = vec![0; db_header.page_size as usize];
     file.rewind()?;
     file.read_exact(&mut page_buffer)?;
-
-    let table = read_page(&page_buffer, true)?;
+    let mut page = Page {
+        buffer: &page_buffer,
+        cursor: 0,
+    };
+    let table = read_page(&mut page, true)?;
     Ok((table, db_header))
 }

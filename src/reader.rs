@@ -3,42 +3,96 @@ use anyhow::{bail, Result};
 use std::fmt;
 use std::str;
 
-pub fn read_page(page: &Vec<u8>, first: bool) -> Result<Table> {
-    let mut pointer = 0;
+pub struct Page<'t> {
+    pub buffer: &'t Vec<u8>,
+    pub cursor: usize,
+}
+
+impl<'t> Page<'t> {
+    fn read_u8(&self) -> u8 {
+        let result: [u8; 1] = self.read_bits(1).try_into().unwrap();
+        u8::from_be_bytes(result)
+    }
+
+    fn read_u16(&self) -> u16 {
+        let result: [u8; 2] = self.read_bits(2).try_into().unwrap();
+        u16::from_be_bytes(result)
+    }
+
+    fn read_u24(&self) -> u32 {
+        let result: [u8; 4] = self.read_bits(3).try_into().unwrap();
+        u32::from_be_bytes(result)
+    }
+
+    fn read_u32(&self) -> u32 {
+        let result: [u8; 4] = self.read_bits(4).try_into().unwrap();
+        u32::from_be_bytes(result)
+    }
+
+    fn read_u48(&self) -> u64 {
+        let result: [u8; 8] = self.read_bits(6).try_into().unwrap();
+        u64::from_be_bytes(result)
+    }
+
+    fn read_u64(&self) -> u64 {
+        let result: [u8; 8] = self.read_bits(8).try_into().unwrap();
+        u64::from_be_bytes(result)
+    }
+
+    fn read_f64(&self) -> f64 {
+        let result: [u8; 8] = self.read_bits(8).try_into().unwrap();
+        f64::from_be_bytes(result)
+    }
+
+    fn read_utf8(&self, length: usize) -> String {
+        let record = self.read_bits(length);
+        return String::from(str::from_utf8(record).unwrap());
+    }
+
+    fn read_bits(&self, length: usize) -> &[u8] {
+        return &self.buffer[self.cursor..self.cursor + length];
+    }
+}
+
+pub fn read_page(page: &mut Page, first: bool) -> Result<Table> {
+    // let mut pointer = 0;
     if first {
-        pointer += header::SIZE;
+        page.cursor += header::SIZE;
     }
     let page_type: PageType;
-    match u8::from_be_bytes([page[pointer]]) {
+    match page.read_u8() {
         0x02 => page_type = PageType::InteriorIndex,
         0x05 => page_type = PageType::InteriorTable,
         0x0a => page_type = PageType::LeafIndex,
         0x0d => page_type = PageType::LeafTable,
-        _ => bail!(
-            "Incorrect page type, {}",
-            u8::from_be_bytes([page[pointer]])
-        ),
+        _ => bail!("Incorrect page type, {}", page.read_u8()),
     };
 
-    let cell_count = u16::from_be_bytes([page[pointer + 3], page[pointer + 4]]);
+    page.cursor += 3;
+    let cell_count = page.read_u16();
 
     // moving to the cell pointer array.
     match page_type {
-        PageType::LeafIndex | PageType::LeafTable => pointer += 8,
-        PageType::InteriorIndex | PageType::InteriorTable => pointer += 12,
+        PageType::LeafIndex | PageType::LeafTable => page.cursor += 5,
+        PageType::InteriorIndex | PageType::InteriorTable => page.cursor += 9,
     }
 
     let mut table = Table::new();
+    let cell_pointer_array_start = page.cursor;
+
     // cell pointer array
     for i in 0..cell_count {
-        let counter = i as usize * 2;
-        let cell_pos =
-            u16::from_be_bytes([page[pointer + counter], page[pointer + counter + 1]]) as usize;
-        let row = read_cell(page, cell_pos)?;
+        let next_cell_pointer = i as usize * 2;
+        page.cursor += next_cell_pointer;
+        let cell_location = page.read_u16() as usize;
+        page.cursor = cell_location;
+
+        let row = read_cell(page)?;
         // find an elegant solution to handle internal tables.
         if row[2] != "sqlite_sequence" {
             table.push(row)
         }
+        page.cursor = cell_pointer_array_start;
     }
 
     Ok(table)
@@ -104,27 +158,29 @@ impl fmt::Display for CellType {
     }
 }
 
-fn read_cell(page: &Vec<u8>, mut pointer: usize) -> Result<Row> {
-    let _payload_size = read_varint(page, &mut pointer);
+fn read_cell(page: &mut Page) -> Result<Row> {
+    let _payload_size = read_varint(page);
 
     let mut row = Row::new();
-    let row_id = read_varint(page, &mut pointer);
+    let row_id = read_varint(page);
     row.push(CellType::INT(row_id));
 
-    let previous_pos = pointer;
-    let header_size = read_varint(page, &mut pointer);
+    let previous_pos = page.cursor;
+    let header_size = read_varint(page);
 
-    let mut remaining_header = header_size - (pointer - previous_pos);
+    let mut remaining_header = header_size - (page.cursor - previous_pos);
     let mut serial_types = vec![];
     while remaining_header > 0 {
-        let previous_pos = pointer;
-        let serial_type = read_varint(page, &mut pointer);
+        let previous_pos = page.cursor;
+
+        let serial_type = read_varint(page);
+
         serial_types.push(serial_type);
-        remaining_header -= pointer - previous_pos;
+        remaining_header -= page.cursor - previous_pos;
     }
 
     for serial_type in serial_types {
-        let record = read_elem(serial_type, page, &mut pointer)?;
+        let record = read_elem(serial_type, page)?;
         match record {
             CellType::NULL => continue,
             _ => row.push(record),
@@ -133,49 +189,48 @@ fn read_cell(page: &Vec<u8>, mut pointer: usize) -> Result<Row> {
     Ok(row)
 }
 
-fn read_elem(serial_type: usize, page: &Vec<u8>, pointer: &mut usize) -> Result<CellType> {
+fn read_elem(serial_type: usize, page: &mut Page) -> Result<CellType> {
     match serial_type {
         0 => return Ok(CellType::NULL),
         1 => {
-            let record: [u8; 1] = page[*pointer..*pointer + 1].try_into().unwrap();
-            let record = u8::from_be_bytes(record);
-            *pointer += 1;
+            let record = page.read_u8();
+            page.cursor += 1;
             return Ok(CellType::INT(record as usize));
         }
         2 => {
-            let record: [u8; 2] = page[*pointer..*pointer + 2].try_into().unwrap();
-            let record = u16::from_be_bytes(record);
-            *pointer += 2;
+            let record = page.read_u16();
+            page.cursor += 2;
+
             return Ok(CellType::INT(record as usize));
         }
         3 => {
-            let record: [u8; 4] = page[*pointer..*pointer + 3].try_into().unwrap();
-            let record = u32::from_be_bytes(record);
-            *pointer += 3;
+            let record = page.read_u24();
+            page.cursor += 3;
+
             return Ok(CellType::INT(record as usize));
         }
         4 => {
-            let record: [u8; 4] = page[*pointer..*pointer + 4].try_into().unwrap();
-            let record = u32::from_be_bytes(record);
-            *pointer += 4;
+            let record = page.read_u32();
+            page.cursor += 4;
+
             return Ok(CellType::INT(record as usize));
         }
         5 => {
-            let record: [u8; 8] = page[*pointer..*pointer + 6].try_into().unwrap();
-            let record = u64::from_be_bytes(record);
-            *pointer += 6;
+            let record = page.read_u48();
+            page.cursor += 6;
+
             return Ok(CellType::INT(record as usize));
         }
         6 => {
-            let record: [u8; 8] = page[*pointer..*pointer + 8].try_into().unwrap();
-            let record = u64::from_be_bytes(record);
-            *pointer += 8;
+            let record = page.read_u64();
+            page.cursor += 8;
+
             return Ok(CellType::INT(record as usize));
         }
         7 => {
-            let record: [u8; 8] = page[*pointer..*pointer + 8].try_into().unwrap();
-            let record = f64::from_be_bytes(record);
-            *pointer += 8;
+            let record = page.read_f64();
+            page.cursor += 8;
+
             return Ok(CellType::FLOAT(record));
         }
         8 => return Ok(CellType::INT(0 as usize)),
@@ -186,17 +241,15 @@ fn read_elem(serial_type: usize, page: &Vec<u8>, pointer: &mut usize) -> Result<
             if serial_type >= 12 && serial_type % 2 == 0 {
                 data_size = (serial_type - 12) / 2;
 
-                let record = &page[*pointer..*pointer + data_size];
-                let record = String::from(str::from_utf8(record).unwrap());
-                *pointer += data_size;
+                let record = page.read_utf8(data_size);
+                page.cursor += data_size;
 
                 return Ok(CellType::BLOB(record));
             } else if serial_type >= 13 && serial_type % 2 == 1 {
                 data_size = (serial_type - 13) / 2;
 
-                let record = &page[*pointer..*pointer + data_size];
-                let record = String::from(str::from_utf8(record).unwrap());
-                *pointer += data_size;
+                let record = page.read_utf8(data_size);
+                page.cursor += data_size;
 
                 return Ok(CellType::STRING(record));
             } else {
@@ -206,15 +259,15 @@ fn read_elem(serial_type: usize, page: &Vec<u8>, pointer: &mut usize) -> Result<
     }
 }
 
-fn read_varint(page: &Vec<u8>, pointer: &mut usize) -> usize {
+fn read_varint(page: &mut Page) -> usize {
     let mask = 0b01111111;
-    let current_value = page[*pointer];
+    let current_value = page.read_u8();
     let mut flag = (current_value >> 7) & 1 == 1;
     let mut result = (current_value & mask) as usize;
 
     while flag {
-        *pointer += 1;
-        let mut current_value = page[*pointer];
+        page.cursor += 1;
+        let mut current_value = page.read_u8();
         flag = (current_value >> 7) & 1 == 1;
         if flag {
             current_value &= mask;
@@ -222,7 +275,7 @@ fn read_varint(page: &Vec<u8>, pointer: &mut usize) -> usize {
         result = (result << 7) | current_value as usize;
     }
 
-    *pointer += 1;
+    page.cursor += 1;
 
     return result;
 }
@@ -234,32 +287,68 @@ mod tests {
     #[test]
     fn test_read_varint() {
         let test_cases = [
-            (vec![0b00001000], 0, 0b00001000, 1),
-            (vec![0b11000001, 0b00000001], 0, 0b10000010000001, 2),
             (
-                vec![0b11001000, 0b11101000, 0b1001],
-                0,
+                &mut Page {
+                    buffer: &vec![0b00001000],
+                    cursor: 0,
+                },
+                0b00001000,
+                1,
+            ),
+            (
+                &mut Page {
+                    buffer: &vec![0b11000001, 0b00000001],
+                    cursor: 0,
+                },
+                0b10000010000001,
+                2,
+            ),
+            (
+                &mut Page {
+                    buffer: &vec![0b11001000, 0b11101000, 0b1001],
+                    cursor: 0,
+                },
                 0b100100011010000001001,
                 3,
             ),
             // stops when the most significant bit is zero
             (
-                vec![0b11001000, 0b11101000, 0b1001, 0b11001000],
-                0,
+                &mut Page {
+                    buffer: &vec![0b11001000, 0b11101000, 0b1001, 0b11001000],
+                    cursor: 0,
+                },
                 // 1001000 + 1101000 + 0001001
                 0b100100011010000001001,
                 3,
             ),
             // starts from pointer
-            (vec![0b1001, 0b11101000, 0b1001], 1, 0b11010000001001, 3),
+            (
+                &mut Page {
+                    buffer: &vec![0b1001, 0b11101000, 0b1001],
+                    cursor: 1,
+                },
+                0b11010000001001,
+                3,
+            ),
         ];
 
-        for (page, pointer, expected, expected_pointer) in &test_cases {
-            let mut pointer = *pointer;
-            let result = read_varint(page, &mut pointer);
+        for (page, expected, expected_pointer) in test_cases {
+            let result = read_varint(page);
 
-            assert_eq!(result, *expected);
-            assert_eq!(pointer, *expected_pointer);
+            assert_eq!(result, expected);
+            assert_eq!(page.cursor, expected_pointer);
         }
+    }
+
+    #[test]
+    fn test_read_varint_two() {
+        let mut page = Page {
+            buffer: &vec![0b00001000],
+            cursor: 0,
+        };
+        let expected = 0b00001000;
+        let result = read_varint(&mut page);
+        assert_eq!(result, expected);
+        assert_eq!(page.cursor, 1);
     }
 }
