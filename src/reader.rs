@@ -1,6 +1,6 @@
 use crate::header;
+use crate::table::{Record, Row, Table};
 use anyhow::{bail, Result};
-use std::fmt;
 use std::str;
 
 pub struct Page<'t> {
@@ -64,7 +64,6 @@ impl<'t> Page<'t> {
 }
 
 pub fn read_page(page: &mut Page, first: bool) -> Result<Table> {
-    // let mut pointer = 0;
     if first {
         page.cursor += header::SIZE;
     }
@@ -115,65 +114,12 @@ enum PageType {
     LeafTable,
 }
 
-pub type Table = Vec<Row>;
-type Row = Vec<CellType>;
-
-#[derive(Debug)]
-pub enum CellType {
-    NULL,
-    INT(usize),
-    FLOAT(f64),
-    RESERVED,
-    BLOB(String),
-    STRING(String),
-}
-
-impl CellType {
-    pub fn to_int(&self) -> Option<usize> {
-        match &self {
-            CellType::INT(val) => Some(*val),
-            _ => None,
-        }
-    }
-
-    pub fn to_str(&self) -> Option<&str> {
-        match &self {
-            CellType::STRING(val) | CellType::BLOB(val) => Some(&val[..]),
-            _ => None,
-        }
-    }
-}
-
-impl PartialEq<&str> for CellType {
-    fn eq(&self, other: &&str) -> bool {
-        match &self {
-            CellType::STRING(val) | CellType::BLOB(val) => val == other,
-            _ => false,
-        }
-    }
-
-    fn ne(&self, other: &&str) -> bool {
-        !&self.eq(other)
-    }
-}
-
-impl fmt::Display for CellType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self {
-            Self::INT(v) => write!(f, "{}", v),
-            Self::FLOAT(v) => write!(f, "{:.4}", v),
-            Self::BLOB(v) | Self::STRING(v) => write!(f, "{}", v),
-            _ => Ok(()),
-        }
-    }
-}
-
 fn read_cell(page: &mut Page) -> Result<Row> {
     let _payload_size = read_varint(page);
 
     let mut row = Row::new();
     let row_id = read_varint(page);
-    row.push(CellType::INT(row_id));
+    row.push(Record::INT(row_id));
 
     let previous_pos = page.cursor;
     let header_size = read_varint(page);
@@ -192,39 +138,39 @@ fn read_cell(page: &mut Page) -> Result<Row> {
     for serial_type in serial_types {
         let record = read_elem(serial_type, page)?;
         match record {
-            CellType::NULL => continue,
+            Record::NULL => continue,
             _ => row.push(record),
         }
     }
     Ok(row)
 }
 
-fn read_elem(serial_type: usize, page: &mut Page) -> Result<CellType> {
-    let result: CellType;
+fn read_elem(serial_type: usize, page: &mut Page) -> Result<Record> {
+    let result: Record;
     match serial_type {
-        0 => result = CellType::NULL,
-        1 => result = CellType::INT(page.read_u8() as usize),
-        2 => result = CellType::INT(page.read_u16() as usize),
-        3 => result = CellType::INT(page.read_u24() as usize),
-        4 => result = CellType::INT(page.read_u32() as usize),
-        5 => result = CellType::INT(page.read_u48() as usize),
-        6 => result = CellType::INT(page.read_u64() as usize),
-        7 => result = CellType::FLOAT(page.read_f64()),
-        8 => result = CellType::INT(0 as usize),
-        9 => result = CellType::INT(1 as usize),
-        10 | 11 => result = CellType::RESERVED,
+        0 => result = Record::NULL,
+        1 => result = Record::INT(page.read_u8() as usize),
+        2 => result = Record::INT(page.read_u16() as usize),
+        3 => result = Record::INT(page.read_u24() as usize),
+        4 => result = Record::INT(page.read_u32() as usize),
+        5 => result = Record::INT(page.read_u48() as usize),
+        6 => result = Record::INT(page.read_u64() as usize),
+        7 => result = Record::FLOAT(page.read_f64()),
+        8 => result = Record::INT(0 as usize),
+        9 => result = Record::INT(1 as usize),
+        10 | 11 => result = Record::RESERVED,
         _ => {
             let data_size: usize;
             if serial_type >= 12 && serial_type % 2 == 0 {
                 data_size = (serial_type - 12) / 2;
 
                 let record = page.read_utf8(data_size);
-                result = CellType::BLOB(record);
+                result = Record::BLOB(record);
             } else if serial_type >= 13 && serial_type % 2 == 1 {
                 data_size = (serial_type - 13) / 2;
 
                 let record = page.read_utf8(data_size);
-                result = CellType::STRING(record);
+                result = Record::STRING(record);
             } else {
                 bail!("incorrect serial_type {}", serial_type);
             }
