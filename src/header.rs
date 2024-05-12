@@ -1,3 +1,9 @@
+use crate::page::{read_page, Page};
+use crate::table::Table;
+use anyhow::Result;
+use std::fs::File;
+use std::io::{Read, Seek};
+
 pub const SIZE: usize = 100;
 
 pub struct DbHeader {
@@ -30,4 +36,21 @@ impl DbHeader {
             encoding,
         };
     }
+}
+
+pub fn read_schema(file: &mut File) -> Result<(Table, DbHeader)> {
+    let mut buffer = [0; SIZE];
+    file.read_exact(&mut buffer)?;
+
+    let db_header = DbHeader::build(&buffer);
+
+    let mut page_buffer = vec![0; db_header.page_size as usize];
+    file.rewind()?;
+    file.read_exact(&mut page_buffer)?;
+    let mut page = Page {
+        buffer: &page_buffer,
+        cursor: 0,
+    };
+    let table = read_page(&mut page, true)?;
+    Ok((table, db_header))
 }
