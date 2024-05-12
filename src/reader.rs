@@ -9,44 +9,53 @@ pub struct Page<'t> {
 }
 
 impl<'t> Page<'t> {
-    fn read_u8(&self) -> u8 {
+    fn read_u8(&mut self) -> u8 {
         let result: [u8; 1] = self.read_bits(1).try_into().unwrap();
+        self.cursor += 1;
         u8::from_be_bytes(result)
     }
 
-    fn read_u16(&self) -> u16 {
+    fn read_u16(&mut self) -> u16 {
         let result: [u8; 2] = self.read_bits(2).try_into().unwrap();
+        self.cursor += 2;
         u16::from_be_bytes(result)
     }
 
-    fn read_u24(&self) -> u32 {
+    fn read_u24(&mut self) -> u32 {
         let result: [u8; 4] = self.read_bits(3).try_into().unwrap();
+        self.cursor += 3;
         u32::from_be_bytes(result)
     }
 
-    fn read_u32(&self) -> u32 {
+    fn read_u32(&mut self) -> u32 {
         let result: [u8; 4] = self.read_bits(4).try_into().unwrap();
+        self.cursor += 4;
         u32::from_be_bytes(result)
     }
 
-    fn read_u48(&self) -> u64 {
+    fn read_u48(&mut self) -> u64 {
         let result: [u8; 8] = self.read_bits(6).try_into().unwrap();
+        self.cursor += 6;
         u64::from_be_bytes(result)
     }
 
-    fn read_u64(&self) -> u64 {
+    fn read_u64(&mut self) -> u64 {
         let result: [u8; 8] = self.read_bits(8).try_into().unwrap();
+        self.cursor += 8;
         u64::from_be_bytes(result)
     }
 
-    fn read_f64(&self) -> f64 {
+    fn read_f64(&mut self) -> f64 {
         let result: [u8; 8] = self.read_bits(8).try_into().unwrap();
+        self.cursor += 8;
         f64::from_be_bytes(result)
     }
 
-    fn read_utf8(&self, length: usize) -> String {
+    fn read_utf8(&mut self, length: usize) -> String {
         let record = self.read_bits(length);
-        return String::from(str::from_utf8(record).unwrap());
+        let result = String::from(str::from_utf8(record).unwrap());
+        self.cursor += length;
+        return result;
     }
 
     fn read_bits(&self, length: usize) -> &[u8] {
@@ -68,13 +77,14 @@ pub fn read_page(page: &mut Page, first: bool) -> Result<Table> {
         _ => bail!("Incorrect page type, {}", page.read_u8()),
     };
 
-    page.cursor += 3;
+    // skip next 2 values.
+    page.cursor += 2;
     let cell_count = page.read_u16();
 
     // moving to the cell pointer array.
     match page_type {
-        PageType::LeafIndex | PageType::LeafTable => page.cursor += 5,
-        PageType::InteriorIndex | PageType::InteriorTable => page.cursor += 9,
+        PageType::LeafIndex | PageType::LeafTable => page.cursor += 3,
+        PageType::InteriorIndex | PageType::InteriorTable => page.cursor += 7,
     }
 
     let mut table = Table::new();
@@ -190,73 +200,37 @@ fn read_cell(page: &mut Page) -> Result<Row> {
 }
 
 fn read_elem(serial_type: usize, page: &mut Page) -> Result<CellType> {
+    let result: CellType;
     match serial_type {
-        0 => return Ok(CellType::NULL),
-        1 => {
-            let record = page.read_u8();
-            page.cursor += 1;
-            return Ok(CellType::INT(record as usize));
-        }
-        2 => {
-            let record = page.read_u16();
-            page.cursor += 2;
-
-            return Ok(CellType::INT(record as usize));
-        }
-        3 => {
-            let record = page.read_u24();
-            page.cursor += 3;
-
-            return Ok(CellType::INT(record as usize));
-        }
-        4 => {
-            let record = page.read_u32();
-            page.cursor += 4;
-
-            return Ok(CellType::INT(record as usize));
-        }
-        5 => {
-            let record = page.read_u48();
-            page.cursor += 6;
-
-            return Ok(CellType::INT(record as usize));
-        }
-        6 => {
-            let record = page.read_u64();
-            page.cursor += 8;
-
-            return Ok(CellType::INT(record as usize));
-        }
-        7 => {
-            let record = page.read_f64();
-            page.cursor += 8;
-
-            return Ok(CellType::FLOAT(record));
-        }
-        8 => return Ok(CellType::INT(0 as usize)),
-        9 => return Ok(CellType::INT(1 as usize)),
-        10 | 11 => return Ok(CellType::RESERVED),
+        0 => result = CellType::NULL,
+        1 => result = CellType::INT(page.read_u8() as usize),
+        2 => result = CellType::INT(page.read_u16() as usize),
+        3 => result = CellType::INT(page.read_u24() as usize),
+        4 => result = CellType::INT(page.read_u32() as usize),
+        5 => result = CellType::INT(page.read_u48() as usize),
+        6 => result = CellType::INT(page.read_u64() as usize),
+        7 => result = CellType::FLOAT(page.read_f64()),
+        8 => result = CellType::INT(0 as usize),
+        9 => result = CellType::INT(1 as usize),
+        10 | 11 => result = CellType::RESERVED,
         _ => {
             let data_size: usize;
             if serial_type >= 12 && serial_type % 2 == 0 {
                 data_size = (serial_type - 12) / 2;
 
                 let record = page.read_utf8(data_size);
-                page.cursor += data_size;
-
-                return Ok(CellType::BLOB(record));
+                result = CellType::BLOB(record);
             } else if serial_type >= 13 && serial_type % 2 == 1 {
                 data_size = (serial_type - 13) / 2;
 
                 let record = page.read_utf8(data_size);
-                page.cursor += data_size;
-
-                return Ok(CellType::STRING(record));
+                result = CellType::STRING(record);
             } else {
                 bail!("incorrect serial_type {}", serial_type);
             }
         }
     }
+    return Ok(result);
 }
 
 fn read_varint(page: &mut Page) -> usize {
@@ -266,7 +240,6 @@ fn read_varint(page: &mut Page) -> usize {
     let mut result = (current_value & mask) as usize;
 
     while flag {
-        page.cursor += 1;
         let mut current_value = page.read_u8();
         flag = (current_value >> 7) & 1 == 1;
         if flag {
@@ -274,8 +247,6 @@ fn read_varint(page: &mut Page) -> usize {
         }
         result = (result << 7) | current_value as usize;
     }
-
-    page.cursor += 1;
 
     return result;
 }
