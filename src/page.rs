@@ -136,7 +136,7 @@ fn read_cell(page: &mut Page) -> Result<Row> {
     }
 
     for serial_type in serial_types {
-        let record = read_elem(serial_type, page)?;
+        let record = read_record(serial_type, page)?;
         match record {
             Record::NULL => continue,
             _ => row.push(record),
@@ -145,7 +145,7 @@ fn read_cell(page: &mut Page) -> Result<Row> {
     Ok(row)
 }
 
-fn read_elem(serial_type: usize, page: &mut Page) -> Result<Record> {
+fn read_record(serial_type: usize, page: &mut Page) -> Result<Record> {
     let result: Record;
     match serial_type {
         0 => result = Record::NULL,
